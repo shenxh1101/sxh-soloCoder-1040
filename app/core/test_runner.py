@@ -215,14 +215,7 @@ class TestRunner:
             variables["env"]["name"] = environment.name
             
             for var in environment.variables:
-                if var.is_secret:
-                    variables["env"][var.key] = "***"
-                else:
-                    variables["env"][var.key] = var.value
-            
-            variables["__env_secure"] = {}
-            for var in environment.variables:
-                variables["__env_secure"][var.key] = var.value
+                variables["env"][var.key] = var.value
 
         variables["global"] = {
             "timestamp": int(time.time()),
@@ -244,13 +237,6 @@ class TestRunner:
         if task.test_case_ids:
             conditions.append(TestCase.id.in_(task.test_case_ids))
         
-        if task.tags:
-            tag_conditions = []
-            for tag in task.tags:
-                tag_conditions.append(TestCase.tags.contains([tag]))
-                tag_conditions.append(TestCase.test_suite.has(TestSuite.tags.contains([tag])))
-            conditions.append(or_(*tag_conditions))
-        
         if conditions:
             query = query.filter(or_(*conditions))
         else:
@@ -258,4 +244,16 @@ class TestRunner:
         
         query = query.order_by(TestSuite.id, TestCase.order)
         
-        return query.all()
+        test_cases = query.all()
+        
+        if task.tags:
+            task_tags = set(tag.lower() for tag in task.tags)
+            filtered_cases = []
+            for case in test_cases:
+                case_tags = set(tag.lower() for tag in (case.tags or []))
+                suite_tags = set(tag.lower() for tag in (case.test_suite.tags or []))
+                if task_tags & case_tags or task_tags & suite_tags:
+                    filtered_cases.append(case)
+            return filtered_cases
+        
+        return test_cases

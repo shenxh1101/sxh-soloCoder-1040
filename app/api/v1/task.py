@@ -75,14 +75,25 @@ def create_task(task_in: TaskCreate, db: Session = Depends(get_db)):
         if not env:
             raise HTTPException(status_code=404, detail="环境不存在")
     
+    if task_in.task_type == "scheduled" and task_in.cron_expression:
+        valid, error_msg, _ = scheduler.validate_cron_expression(task_in.cron_expression)
+        if not valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+    
     task = Task(**task_in.model_dump())
     db.add(task)
     db.commit()
     db.refresh(task)
     
-    if task.task_type == "scheduled" and task.is_enabled:
-        scheduler.update_scheduled_task(task)
+    if task.task_type == "scheduled" and task.is_enabled and task.cron_expression:
+        try:
+            scheduler.update_scheduled_task(task)
+        except Exception as e:
+            db.delete(task)
+            db.commit()
+            raise HTTPException(status_code=400, detail=str(e))
     
+    db.refresh(task)
     return ResponseModel(data=task, message="创建成功")
 
 
@@ -92,6 +103,15 @@ def update_task(task_id: int, task_in: TaskUpdate, db: Session = Depends(get_db)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     
+    new_task_type = task_in.task_type if task_in.task_type is not None else task.task_type
+    new_cron = task_in.cron_expression if task_in.cron_expression is not None else task.cron_expression
+    new_is_enabled = task_in.is_enabled if task_in.is_enabled is not None else task.is_enabled
+    
+    if new_task_type == "scheduled" and new_cron and new_is_enabled:
+        valid, error_msg, _ = scheduler.validate_cron_expression(new_cron)
+        if not valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+    
     update_data = task_in.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -100,8 +120,12 @@ def update_task(task_id: int, task_in: TaskUpdate, db: Session = Depends(get_db)
     db.commit()
     db.refresh(task)
     
-    scheduler.update_scheduled_task(task)
+    try:
+        scheduler.update_scheduled_task(task)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
+    db.refresh(task)
     return ResponseModel(data=task, message="更新成功")
 
 
@@ -140,8 +164,8 @@ async def run_task(task_id: int, run_request: Optional[TaskRunRequest] = None, d
 
 
 @router.post("/{task_id}/run-async", response_model=ResponseModel)
-def run_task_async(task_id: int, run_request: Optional[TaskRunRequest] = None, 
-                   background_tasks: BackgroundTasks = BackgroundTasks(), db: Session = Depends(get_db)):
+async def run_task_async(task_id: int, run_request: Optional[TaskRunRequest] = None, 
+                   db: Session = Depends(get_db)):
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -168,14 +192,16 @@ def run_task_async(task_id: int, run_request: Optional[TaskRunRequest] = None,
     db.refresh(execution_record)
     
     override_params = run_request.model_dump() if run_request else None
+    record_id = execution_record.id
     
     async def execute_background():
         try:
-            await scheduler.run_task_now(task_id, override_params)
+            await scheduler.run_task_now(task_id, override_params, record_id)
         except Exception as e:
             print(f"后台执行任务失败: {str(e)}")
     
-    background_tasks.add_task(lambda: asyncio.create_task(execute_background()))
+    import asyncio
+    asyncio.create_task(execute_background())
     
     return ResponseModel(
         data={"execution_record_id": execution_record.id, "status": "pending"},
@@ -189,13 +215,24 @@ def enable_task(task_id: int, db: Session = Depends(get_db)):
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     
+    if task.task_type == "scheduled" and task.cron_expression:
+        valid, error_msg, _ = scheduler.validate_cron_expression(task.cron_expression)
+        if not valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+    
     task.is_enabled = True
     task.updated_at = datetime.now()
     db.commit()
     db.refresh(task)
     
-    scheduler.update_scheduled_task(task)
+    try:
+        scheduler.update_scheduled_task(task)
+    except Exception as e:
+        task.is_enabled = False
+        db.commit()
+        raise HTTPException(status_code=400, detail=str(e))
     
+    db.refresh(task)
     return ResponseModel(data=task, message="任务已启用")
 
 
@@ -206,12 +243,14 @@ def disable_task(task_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="任务不存在")
     
     task.is_enabled = False
+    task.next_run_at = None
     task.updated_at = datetime.now()
     db.commit()
     db.refresh(task)
     
     scheduler.update_scheduled_task(task)
     
+    db.refresh(task)
     return ResponseModel(data=task, message="任务已禁用")
 
 

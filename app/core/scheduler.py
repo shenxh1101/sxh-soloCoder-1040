@@ -51,15 +51,24 @@ class TaskScheduler:
         finally:
             db.close()
 
+    def validate_cron_expression(self, cron_expression: str) -> tuple[bool, str, any]:
+        try:
+            trigger = CronTrigger.from_crontab(cron_expression, timezone=settings.SCHEDULER_TIMEZONE)
+            return True, "", trigger
+        except Exception as e:
+            return False, f"无效的 cron 表达式: {str(e)}", None
+
     def _add_scheduled_task(self, task: Task):
         job_id = f"scheduled_task_{task.id}"
         
         if self._scheduler.get_job(job_id):
             self._scheduler.remove_job(job_id)
         
+        valid, error_msg, trigger = self.validate_cron_expression(task.cron_expression)
+        if not valid:
+            raise ValueError(error_msg)
+        
         try:
-            trigger = CronTrigger.from_crontab(task.cron_expression, timezone=settings.SCHEDULER_TIMEZONE)
-            
             self._scheduler.add_job(
                 self._execute_scheduled_task,
                 trigger=trigger,
@@ -72,13 +81,13 @@ class TaskScheduler:
             
             db = SessionLocal()
             try:
-                task.next_run_at = next_run
+                db.query(Task).filter(Task.id == task.id).update({"next_run_at": next_run})
                 db.commit()
             finally:
                 db.close()
                 
         except Exception as e:
-            print(f"添加定时任务失败: {task.name}, 错误: {str(e)}")
+            raise ValueError(f"添加定时任务失败: {str(e)}")
 
     def update_scheduled_task(self, task: Task):
         if task.task_type == "scheduled" and task.is_enabled and task.cron_expression:
@@ -90,6 +99,13 @@ class TaskScheduler:
         job_id = f"scheduled_task_{task_id}"
         if self._scheduler.get_job(job_id):
             self._scheduler.remove_job(job_id)
+        
+        db = SessionLocal()
+        try:
+            db.query(Task).filter(Task.id == task_id).update({"next_run_at": None})
+            db.commit()
+        finally:
+            db.close()
 
     async def _execute_scheduled_task(self, task_id: int):
         db = SessionLocal()
@@ -111,7 +127,8 @@ class TaskScheduler:
             db.close()
 
     async def _execute_task(self, task: Task, trigger_type: str = "manual", 
-                           db: Session = None, override_params: Dict[str, Any] = None) -> ExecutionRecord:
+                           db: Session = None, override_params: Dict[str, Any] = None,
+                           execution_record_id: int = None) -> ExecutionRecord:
         if db is None:
             db = SessionLocal()
             should_close = True
@@ -125,20 +142,29 @@ class TaskScheduler:
             environment_id = override_params.get("environment_id") if override_params else task.environment_id
             environment = db.query(Environment).filter(Environment.id == environment_id).first() if environment_id else None
 
-            execution_record = ExecutionRecord(
-                task_id=task.id,
-                project_id=task.project_id,
-                environment_id=environment_id,
-                trigger_type=trigger_type,
-                status="running",
-                total_cases=0,
-                passed_cases=0,
-                failed_cases=0,
-                skipped_cases=0,
-                pass_rate=0.0,
-                total_duration=0.0
-            )
-            db.add(execution_record)
+            if execution_record_id:
+                execution_record = db.query(ExecutionRecord).filter(
+                    ExecutionRecord.id == execution_record_id
+                ).first()
+                if not execution_record:
+                    raise ValueError(f"执行记录 {execution_record_id} 不存在")
+                execution_record.status = "running"
+                execution_record.started_at = datetime.now()
+            else:
+                execution_record = ExecutionRecord(
+                    task_id=task.id,
+                    project_id=task.project_id,
+                    environment_id=environment_id,
+                    trigger_type=trigger_type,
+                    status="running",
+                    total_cases=0,
+                    passed_cases=0,
+                    failed_cases=0,
+                    skipped_cases=0,
+                    pass_rate=0.0,
+                    total_duration=0.0
+                )
+                db.add(execution_record)
             db.flush()
 
             runner = TestRunner(db)
@@ -193,14 +219,20 @@ class TaskScheduler:
             if should_close:
                 db.close()
 
-    async def run_task_now(self, task_id: int, override_params: Dict[str, Any] = None) -> int:
+    async def run_task_now(self, task_id: int, override_params: Dict[str, Any] = None, execution_record_id: int = None) -> int:
         db = SessionLocal()
         try:
             task = db.query(Task).filter(Task.id == task_id).first()
             if not task:
                 raise ValueError("任务不存在")
             
-            execution_record = await self._execute_task(task, trigger_type="manual", db=db, override_params=override_params)
+            execution_record = await self._execute_task(
+                task, 
+                trigger_type="manual", 
+                db=db, 
+                override_params=override_params,
+                execution_record_id=execution_record_id
+            )
             
             return execution_record.id
         finally:

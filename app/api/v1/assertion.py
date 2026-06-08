@@ -11,6 +11,47 @@ from app.schemas.common import ResponseModel
 router = APIRouter(prefix="/assertions", tags=["断言规则管理"])
 
 
+@router.get("/types", response_model=ResponseModel[List])
+def get_assertion_types():
+    types = [
+        {
+            "type": "response_status",
+            "name": "响应状态码",
+            "description": "验证HTTP响应状态码",
+            "comparators": ["equals", "not_equals", "greater_than", "less_than", "greater_than_or_equal", "less_than_or_equal"]
+        },
+        {
+            "type": "response_body",
+            "name": "响应体",
+            "description": "验证响应体内容",
+            "comparators": ["equals", "not_equals", "contains", "not_contains", "matches", "is_null", "is_not_null", "is_empty", "is_not_empty", "greater_than", "less_than"]
+        },
+        {
+            "type": "response_headers",
+            "name": "响应头",
+            "description": "验证响应头内容",
+            "comparators": ["equals", "not_equals", "contains", "not_contains", "exists", "is_null", "is_not_null"]
+        },
+        {
+            "type": "response_time",
+            "name": "响应时间",
+            "description": "验证响应时间(ms)",
+            "comparators": ["less_than", "greater_than", "less_than_or_equal", "greater_than_or_equal"]
+        }
+    ]
+    
+    return ResponseModel(data=types)
+
+
+@router.get("", response_model=ResponseModel[List[AssertionSchema]])
+def get_assertions(request_step_id: Optional[int] = None, db: Session = Depends(get_db)):
+    query = db.query(Assertion)
+    if request_step_id:
+        query = query.filter(Assertion.request_step_id == request_step_id)
+    assertions = query.order_by(Assertion.order).all()
+    return ResponseModel(data=assertions)
+
+
 @router.get("/{assertion_id}", response_model=ResponseModel[AssertionSchema])
 def get_assertion(assertion_id: int, db: Session = Depends(get_db)):
     assertion = db.query(Assertion).filter(Assertion.id == assertion_id).first()
@@ -56,35 +97,3 @@ def delete_assertion(assertion_id: int, db: Session = Depends(get_db)):
     db.delete(assertion)
     db.commit()
     return ResponseModel(message="删除成功")
-
-
-@router.get("/types", response_model=ResponseModel[List])
-def get_assertion_types():
-    types = [
-        {
-            "type": "response_status",
-            "name": "响应状态码",
-            "description": "验证HTTP响应状态码",
-            "comparators": ["equals", "not_equals", "greater_than", "less_than"]
-        },
-        {
-            "type": "response_body",
-            "name": "响应体",
-            "description": "验证响应体内容",
-            "comparators": ["equals", "not_equals", "contains", "not_contains", "matches", "is_null", "is_not_null", "is_empty", "is_not_empty"]
-        },
-        {
-            "type": "response_headers",
-            "name": "响应头",
-            "description": "验证响应头内容",
-            "comparators": ["equals", "not_equals", "contains", "not_contains", "exists"]
-        },
-        {
-            "type": "response_time",
-            "name": "响应时间",
-            "description": "验证响应时间(ms)",
-            "comparators": ["less_than", "greater_than", "less_than_or_equal", "greater_than_or_equal"]
-        }
-    ]
-    
-    return ResponseModel(data=types)

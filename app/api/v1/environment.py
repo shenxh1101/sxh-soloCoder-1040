@@ -40,7 +40,15 @@ def get_environments(
     for env in items:
         env_dict = EnvironmentSchema.model_validate(env).model_dump()
         env_dict["variables"] = [
-            {**v.__dict__, "value": "***" if v.is_secret else v.value}
+            {
+                "id": v.id,
+                "key": v.key,
+                "value": "***" if v.is_secret else v.value,
+                "is_secret": v.is_secret,
+                "description": v.description,
+                "environment_id": v.environment_id,
+                "created_at": v.created_at
+            }
             for v in env.variables
         ]
         result_items.append(EnvironmentOut(**env_dict))
@@ -64,14 +72,22 @@ def get_environment(env_id: int, db: Session = Depends(get_db)):
     
     env_dict = EnvironmentSchema.model_validate(env).model_dump()
     env_dict["variables"] = [
-        {**v.__dict__, "value": "***" if v.is_secret else v.value}
+        {
+            "id": v.id,
+            "key": v.key,
+            "value": "***" if v.is_secret else v.value,
+            "is_secret": v.is_secret,
+            "description": v.description,
+            "environment_id": v.environment_id,
+            "created_at": v.created_at
+        }
         for v in env.variables
     ]
     
     return ResponseModel(data=EnvironmentOut(**env_dict))
 
 
-@router.post("", response_model=ResponseModel[EnvironmentSchema])
+@router.post("", response_model=ResponseModel[EnvironmentOut])
 def create_environment(env_in: EnvironmentCreate, db: Session = Depends(get_db)):
     project = db.query(Project).filter(Project.id == env_in.project_id).first()
     if not project:
@@ -94,10 +110,25 @@ def create_environment(env_in: EnvironmentCreate, db: Session = Depends(get_db))
     
     db.commit()
     db.refresh(env)
-    return ResponseModel(data=env, message="创建成功")
+    
+    env_dict = EnvironmentSchema.model_validate(env).model_dump()
+    env_dict["variables"] = [
+        {
+            "id": v.id,
+            "key": v.key,
+            "value": "***" if v.is_secret else v.value,
+            "is_secret": v.is_secret,
+            "description": v.description,
+            "environment_id": v.environment_id,
+            "created_at": v.created_at
+        }
+        for v in env.variables
+    ]
+    
+    return ResponseModel(data=EnvironmentOut(**env_dict), message="创建成功")
 
 
-@router.put("/{env_id}", response_model=ResponseModel[EnvironmentSchema])
+@router.put("/{env_id}", response_model=ResponseModel[EnvironmentOut])
 def update_environment(env_id: int, env_in: EnvironmentUpdate, db: Session = Depends(get_db)):
     env = db.query(Environment).filter(Environment.id == env_id).first()
     if not env:
@@ -116,7 +147,22 @@ def update_environment(env_id: int, env_in: EnvironmentUpdate, db: Session = Dep
     
     db.commit()
     db.refresh(env)
-    return ResponseModel(data=env, message="更新成功")
+    
+    env_dict = EnvironmentSchema.model_validate(env).model_dump()
+    env_dict["variables"] = [
+        {
+            "id": v.id,
+            "key": v.key,
+            "value": "***" if v.is_secret else v.value,
+            "is_secret": v.is_secret,
+            "description": v.description,
+            "environment_id": v.environment_id,
+            "created_at": v.created_at
+        }
+        for v in env.variables
+    ]
+    
+    return ResponseModel(data=EnvironmentOut(**env_dict), message="更新成功")
 
 
 @router.delete("/{env_id}", response_model=ResponseModel)
@@ -147,7 +193,12 @@ def add_environment_variable(env_id: int, var_in: EnvironmentVariableCreate, db:
     db.add(var)
     db.commit()
     db.refresh(var)
-    return ResponseModel(data=var, message="添加成功")
+    
+    var_data = EnvironmentVariableSchema.model_validate(var).model_dump()
+    if var.is_secret:
+        var_data["value"] = "***"
+    
+    return ResponseModel(data=EnvironmentVariableSchema(**var_data), message="添加成功")
 
 
 @router.put("/variables/{var_id}", response_model=ResponseModel[EnvironmentVariableSchema])
@@ -162,7 +213,12 @@ def update_environment_variable(var_id: int, var_in: EnvironmentVariableUpdate, 
     
     db.commit()
     db.refresh(var)
-    return ResponseModel(data=var, message="更新成功")
+    
+    var_data = EnvironmentVariableSchema.model_validate(var).model_dump()
+    if var.is_secret:
+        var_data["value"] = "***"
+    
+    return ResponseModel(data=EnvironmentVariableSchema(**var_data), message="更新成功")
 
 
 @router.delete("/variables/{var_id}", response_model=ResponseModel)
@@ -191,7 +247,15 @@ def get_default_environment(project_id: int, db: Session = Depends(get_db)):
     
     env_dict = EnvironmentSchema.model_validate(env).model_dump()
     env_dict["variables"] = [
-        {**v.__dict__, "value": "***" if v.is_secret else v.value}
+        {
+            "id": v.id,
+            "key": v.key,
+            "value": "***" if v.is_secret else v.value,
+            "is_secret": v.is_secret,
+            "description": v.description,
+            "environment_id": v.environment_id,
+            "created_at": v.created_at
+        }
         for v in env.variables
     ]
     
